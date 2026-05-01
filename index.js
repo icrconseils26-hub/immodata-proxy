@@ -25,46 +25,40 @@ async function findPLUDoc(codeCommune) {
     if (found.length) return { urlFiche: found[0].urlFiche, name: found[0].originalName };
   } catch(e) {}
 
-  // ETAPE 2 : apicarto document — retourne gpu_doc_id + partition + name
+  // ETAPE 2 : apicarto document avec filtrage par code commune/dep
   try {
     const r2 = await fetch(`https://apicarto.ign.fr/api/gpu/document?code_insee=${codeCommune}`);
     const data2 = await r2.json();
 
     if (data2.features && data2.features.length > 0) {
+      // Filtrer les features dont le partition contient le dept ou le code commune
+      const validTypes = ['PLU', 'PLUi', 'CC', 'PLUiH', 'PLUI', 'PLUi-H'];
+      
       for (const feature of data2.features) {
         const props = feature.properties;
-        const partition = props.partition;
+        const partition = props.partition || '';
         const docId = props.gpu_doc_id;
-        const name = props.name;
-        const duType = props.du_type;
+        const name = props.name || '';
+        const duType = props.du_type || '';
 
-        if (!partition || !docId || !name) continue;
-        if (!['PLU', 'PLUi', 'CC', 'PLUiH', 'PLUI'].includes(duType)) continue;
+        if (!docId || !name) continue;
+        if (!validTypes.some(t => duType.toUpperCase().includes(t.toUpperCase()) || duType === 'CC')) continue;
 
-        // Construire l'URL du règlement
-        // Pattern: https://data.geopf.fr/annexes/gpu/documents/{partition}/{docId}/{name}_reglement_{date}.pdf
-        // On essaie plusieurs variantes de nom de fichier
+        // Vérifier que le partition est cohérent avec le département
+        const partitionCode = partition.replace('DU_', '');
+        if (!partitionCode.startsWith(codeDep) && !partitionCode.startsWith('2' + codeDep)) continue;
 
-        const baseUrl = `https://data.geopf.fr/annexes/gpu/documents/${partition}/${docId}`;
+        // Extraire la date du name (format YYYYMMDD en fin de name)
+        const dateMatch = name.match(/(\d{8})$/);
+        if (!dateMatch) continue;
+        const datePart = dateMatch[1];
+        const dateFormatted = datePart.substring(0,4) + datePart.substring(4,6) + datePart.substring(6,8);
 
-        // Variante 1 : name + _reglement_ + date extraite du name
-        const datePart = name.match(/(\d{8})$/)?.[1];
-        if (datePart) {
-          const formattedDate = datePart.substring(0,4) + datePart.substring(4,6) + datePart.substring(6,8);
-          const url1 = `${baseUrl}/${name.replace('_PLUi_', '_').replace('_PLU_', '_')}_reglement_${formattedDate}.pdf`;
-          // Essayer avec le nom exact
-          const url2 = `${baseUrl}/${name}_reglement_${datePart.substring(0,4)}${datePart.substring(4,6)}${datePart.substring(6,8)}.pdf`;
+        // Construire l'URL : pattern data.geopf.fr
+        const codeDoc = partitionCode;
+        const urlFiche = `https://data.geopf.fr/annexes/gpu/documents/${partition}/${docId}/${codeDoc}_reglement_${dateFormatted}.pdf`;
 
-          // Reconstruire proprement
-          const codeDoc = partition.replace('DU_', '');
-          const dateFormatted = datePart.substring(0,4) + datePart.substring(4,6) + datePart.substring(6,8);
-          const urlFiche = `${baseUrl}/${codeDoc}_reglement_${dateFormatted}.pdf`;
-
-          return { urlFiche, name, partition, docId };
-        }
-
-        // Fallback : retourner les infos pour construire l'URL manuellement
-        return { partition, docId, name, urlFiche: null };
+        return { urlFiche, name, partition, docId };
       }
     }
   } catch(e) {}
@@ -130,7 +124,7 @@ app.get('/gpu', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.json({ status: 'ImmoData proxy OK v4' }));
+app.get('/', (req, res) => res.json({ status: 'ImmoData proxy OK v5' }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Proxy running on port ${PORT}`));
